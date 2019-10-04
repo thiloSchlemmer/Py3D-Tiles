@@ -24,7 +24,7 @@ class TestVectorTile(unittest.TestCase):
 
         # act
         vector_tile = VectorTile()
-        vector_tile.fromFile(self.vector_file_path, gzipped=False)
+        vector_tile.from_file(self.vector_file_path, gzipped=False)
         header = vector_tile.header
         actual_magic = header['magic']
         actual_byte_length = header['byteLength']
