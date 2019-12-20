@@ -23,7 +23,7 @@ class TestVectorTile(unittest.TestCase):
         expected_point_positions_byte_length = 8
 
         # act
-        vector_tile = VectorTile()
+        vector_tile = VectorTile(None)
         vector_tile.from_file(self.vector_file_path, gzipped=False)
         header = vector_tile.header
         actual_magic = header['magic']
@@ -32,11 +32,12 @@ class TestVectorTile(unittest.TestCase):
         actual_feature_table_binary_byte_length = header['featureTableBinaryByteLength']
         actual_batch_table_json_byte_length = header['batchTableJsonByteLength']
         actual_batch_table_binary_byte_length = header['batchTableBinaryByteLength']
-        actual_indices_byte_length  = header['indicesByteLength']
+        actual_indices_byte_length = header['indicesByteLength']
         actual_polygon_positions_byte_length = header['polygonPositionsByteLength']
         actual_polyline_positions_byte_length = header['polylinePositionsByteLength']
         actual_point_positions_byte_length = header['pointPositionsByteLength']
 
+        print(vector_tile.featureTable)
         # assert
         self.assertEquals(actual_magic, expected_magic)
         self.assertEquals(actual_byte_length, expected_byte_length)

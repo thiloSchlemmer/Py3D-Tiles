@@ -230,3 +230,7 @@ def collapseIntoTriangles(coords):
         coords.pop(convergingPoint)
 
     return triangles + [coords]
+
+
+def utf8_byte_len(s):
+    return len(s.encode('utf-8'))
