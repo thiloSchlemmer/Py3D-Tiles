@@ -3,6 +3,7 @@ import gzip
 import io
 import json
 import math
+import os
 from collections import OrderedDict
 
 from Py3d_Tiles import earcut
@@ -81,10 +82,10 @@ class VectorTile(object):
         if property_names_to_publish is None:
             property_names_to_publish = []
         if tile_extent is None:
-            tile_extent = {'west': 0,
-                           'south': 0,
-                           'east': 0,
-                           'north': 0,
+            tile_extent = {'west': None,
+                           'south': None,
+                           'east': None,
+                           'north': None,
                            }
         self.featureTable = VectorTile.default_feature_table
         self.property_names_to_publish = property_names_to_publish
@@ -98,14 +99,14 @@ class VectorTile(object):
         self.header = OrderedDict()
         for k, v in self.vector_tile_header.items():
             self.header[k] = 0.0
-        self.header['magic'] = VectorTile.VECTOR_TILE_MAGIC
+        self.header['magic'] = bytes(VectorTile.VECTOR_TILE_MAGIC, 'utf-8')
         self.header['version'] = VectorTile.VECTOR_TILE_VERSION
         self.bounding_volume = {'west': self.extent['west'],
                                 'south': self.extent['south'],
                                 'east': self.extent['east'],
                                 'north': self.extent['north'],
-                                'minimum_height': 0,
-                                'maximum_height': 0
+                                'minimum_height': None,
+                                'maximum_height': None
                                 }
 
     def from_bytes_io(self, f):
@@ -131,20 +132,13 @@ class VectorTile(object):
             feature_table_bytes += unpackEntry(f, 's')
         self.featureTable_body = feature_table_bytes
 
-        self.extent = {'west': self.featureTable['RECTANGLE'][0],
-                       'south': self.featureTable['RECTANGLE'][1],
-                       'east': self.featureTable['RECTANGLE'][2],
-                       'north': self.featureTable['RECTANGLE'][3],
-                       'minimum_height': self.featureTable['MINIMUM_HEIGHT'],
-                       'maximum_height': self.featureTable['MAXIMUM_HEIGHT']
-                       }
-        self.bounding_volume = self.bounding_volume = {'west': self.extent['west'],
-                                                       'south': self.extent['south'],
-                                                       'east': self.extent['east'],
-                                                       'north': self.extent['north'],
-                                                       'minimum_height': self.extent['minimum_height'],
-                                                       'maximum_height': self.extent['maximum_height']
-                                                       }
+        self.bounding_volume = {'west': self.featureTable['RECTANGLE'][0],
+                                'south': self.featureTable['RECTANGLE'][1],
+                                'east': self.featureTable['RECTANGLE'][2],
+                                'north': self.featureTable['RECTANGLE'][3],
+                                'minimum_height': self.featureTable['MINIMUM_HEIGHT'],
+                                'maximum_height': self.featureTable['MAXIMUM_HEIGHT']
+                                }
         batch_table_json = None
         batch_table_bytes = b''
         batch_table_json_byte_length = self.header['batchTableJsonByteLength']
@@ -172,31 +166,31 @@ class VectorTile(object):
         polygon_v = []
         polygon_positions_byte_length = self.header['polygonPositionsByteLength']
 
-        for ud in unpack_and_decode_position(f, polygon_positions_byte_length/8, 'H'):
+        for ud in unpack_and_decode_position(f, polygon_positions_byte_length / 8, 'H'):
             polygon_u.append(ud)
-        for vd in unpack_and_decode_position(f, polygon_positions_byte_length/8, 'H'):
+        for vd in unpack_and_decode_position(f, polygon_positions_byte_length / 8, 'H'):
             polygon_v.append(vd)
 
         polyline_u = []
         polyline_v = []
         polyline_h = []
         polyline_positions_byte_length = self.header['polylinePositionsByteLength']
-        for ud in unpack_and_decode_position(f, polyline_positions_byte_length/8, 'H'):
+        for ud in unpack_and_decode_position(f, polyline_positions_byte_length / 8, 'H'):
             polyline_u.append(ud)
-        for vd in unpack_and_decode_position(f, polyline_positions_byte_length/8, 'H'):
+        for vd in unpack_and_decode_position(f, polyline_positions_byte_length / 8, 'H'):
             polyline_v.append(vd)
-        for hd in unpack_and_decode_position(f, polyline_positions_byte_length/8, 'H'):
+        for hd in unpack_and_decode_position(f, polyline_positions_byte_length / 8, 'H'):
             polyline_h.append(hd)
 
         point_u = []
         point_v = []
         point_h = []
         point_positions_byte_length = self.header['pointPositionsByteLength']
-        for ud in unpack_and_decode_position(f, point_positions_byte_length/8, 'H'):
+        for ud in unpack_and_decode_position(f, point_positions_byte_length / 8, 'H'):
             point_u.append(ud)
-        for vd in unpack_and_decode_position(f, point_positions_byte_length/8, 'H'):
+        for vd in unpack_and_decode_position(f, point_positions_byte_length / 8, 'H'):
             point_v.append(vd)
-        for hd in unpack_and_decode_position(f, point_positions_byte_length/8, 'H'):
+        for hd in unpack_and_decode_position(f, point_positions_byte_length / 8, 'H'):
             point_h.append(hd)
 
         print(point_u)
@@ -219,9 +213,9 @@ class VectorTile(object):
 
     def add_feature(self, feature: {}):
         """
-        A method to add a feature to the vector tile. It is assumed that the featue is
+        A method to add a feature to the vector tile. It is assumed that the feature is
         a geojson-node (with properties- and geometry-node)
-        :param feature:  the (geojson) feature to add to the vectortile
+        :param feature:  the (geojson) feature to add to the vector tile
         """
         assert ("properties" in feature)
         assert ("geometry" in feature)
@@ -248,9 +242,33 @@ class VectorTile(object):
         else:
             raise ValueError("Geometry-Type {} is not supported.".format(geometry_type))
 
+    def to_file(self, filePath, gzipped=False):
+        """
+        A method to write the terrain tile data to a physical file.
+
+        Argument:
+
+        ``file_path``
+
+            An absolute or relative path to write the terrain tile. (Required)
+
+        ``gzipped``
+
+            Indicate if the content should be gzipped. Default is ``False``.
+        """
+        if os.path.isfile(filePath):
+            raise IOError('File %s already exists' % filePath)
+
+        if not gzipped:
+            with open(filePath, 'wb') as f:
+                self._write_to(f)
+        else:
+            with gzip.open(filePath, 'wb') as f:
+                self._write_to(f)
+
     def to_bytes_io(self, gzipped=False):
         """
-        A method to write the terrain tile data to a file-like object (a string buffer).
+        A method to write the vector-tile data to a file-like object (a string buffer).
 
         :param gzipped: Whether the content should be gzipped or not. Default is ``False``.
         """
@@ -266,18 +284,18 @@ class VectorTile(object):
 
         :param f: The file-like object
         """
-        self.featureTable['MINIMUM_HEIGHT'] = self.extent['minimum_height']
-        self.featureTable['MAXIMUM_HEIGHT'] = self.extent['maximum_height']
-        self.featureTable['RECTANGLE'] = [self.extent['west'],
-                                          self.extent['south'],
-                                          self.extent['east'],
-                                          self.extent['north']]
-        self.featureTable['REGION'] = [self.extent['west'],
-                                       self.extent['south'],
-                                       self.extent['east'],
-                                       self.extent['north'],
-                                       self.extent['minimum_height'],
-                                       self.extent['maximum_height']]
+        self.featureTable['MINIMUM_HEIGHT'] = self.bounding_volume['minimum_height']
+        self.featureTable['MAXIMUM_HEIGHT'] = self.bounding_volume['maximum_height']
+        self.featureTable['RECTANGLE'] = [self.bounding_volume['west'],
+                                          self.bounding_volume['south'],
+                                          self.bounding_volume['east'],
+                                          self.bounding_volume['north']]
+        self.featureTable['REGION'] = [self.bounding_volume['west'],
+                                       self.bounding_volume['south'],
+                                       self.bounding_volume['east'],
+                                       self.bounding_volume['north'],
+                                       self.bounding_volume['minimum_height'],
+                                       self.bounding_volume['maximum_height']]
         polygon_positions_container = self.prepare_polygons()
         polyline_positions_container = self.prepare_polylines()
         point_positions_container = self.prepare_points()
@@ -287,55 +305,84 @@ class VectorTile(object):
         polyline_positions = polyline_positions_container['positions_buffer']
         point_positions = point_positions_container['positions_buffer']
 
-        if utf8_byte_len(polygon_positions) != 0:
+        if polygon_positions is not None:
             self.featureTable['POLYGON_COUNTS'] = polygon_positions_container['counts']
             self.featureTable['POLYGON_INDEX_COUNTS'] = polygon_positions_container['indexCounts']
 
-        if utf8_byte_len(polyline_positions) != 0:
+        if polyline_positions is not None:
             self.featureTable['POLYLINE_COUNTS'] = polyline_positions_container['counts']
 
         feature_table_json = json.dumps(self.featureTable)
-        feature_table_binary = ""
+        feature_table_binary = packEntry("I", 0)
         batch_table_json = json.dumps(self.create_batch_table())
-        batch_table_binary = ""
+        batch_table_binary = packEntry("I", 0)
 
+        indices_binary_byte_length = 0 if indices_binary is None else len(indices_binary)
         self.header['byteLength'] = VectorTile.header_byte_length + \
                                     utf8_byte_len(feature_table_json) + \
-                                    utf8_byte_len(feature_table_binary) + \
+                                    len(feature_table_binary) + \
                                     utf8_byte_len(batch_table_json) + \
-                                    utf8_byte_len(batch_table_binary) + \
-                                    len(indices_binary)
+                                    len(batch_table_binary) + \
+                                    indices_binary_byte_length
 
         self.header['featureTableJsonByteLength'] = utf8_byte_len(feature_table_json)
-        self.header['featureTableBinaryByteLength'] = utf8_byte_len(feature_table_binary)
+        self.header['featureTableBinaryByteLength'] = len(feature_table_binary)
         self.header['batchTableJsonByteLength'] = utf8_byte_len(batch_table_json)
-        self.header['batchTableBinaryByteLength'] = utf8_byte_len(batch_table_binary)
-        self.header['indicesByteLength'] = utf8_byte_len(indices_binary)
-        self.header['polygonPositionsByteLength'] = utf8_byte_len(polygon_positions)
-        self.header['polylinePositionsByteLength'] = utf8_byte_len(polyline_positions)
-        self.header['pointPositionsByteLength'] = utf8_byte_len(point_positions)
+        self.header['batchTableBinaryByteLength'] = len(batch_table_binary)
+        self.header['indicesByteLength'] = indices_binary_byte_length
+        self.header['polygonPositionsByteLength'] = 0 if polygon_positions is None else int(len(polygon_positions) / 2)
+        self.header['polylinePositionsByteLength'] = 0 if polyline_positions is None else int(
+            len(polyline_positions) / 2)
+        self.header['pointPositionsByteLength'] = 0 if point_positions is None else int(len(point_positions) / 3)
 
         # begin write
         # Header
         for k, v in self.vector_tile_header.items():
-            f.write(packEntry(v, self.header[k]))
+            type_format = v
+            entry = self.header[k]
+            f.write(packEntry(type_format, entry))
 
-        f.write(self.header +
-                feature_table_json +
-                feature_table_binary +
-                batch_table_json +
-                batch_table_binary +
-                indices_binary +
-                polygon_positions +
-                polyline_positions +
-                point_positions)
+        f.write(bytes(feature_table_json, 'utf-8'))
+        f.write(feature_table_binary)
+        f.write(bytes(batch_table_json, 'utf-8'))
+        f.write(batch_table_binary)
+        if indices_binary is not None:
+            f.write(indices_binary)
+        if polygon_positions is not None:
+            f.write(polygon_positions)
+        if polyline_positions is not None:
+            f.write(polyline_positions)
+        if point_positions is not None:
+            f.write(point_positions)
 
     def _update_extent(self, coordinates: []):
-        min_height = min([c[2] for c in coordinates])
-        max_height = max([c[2] for c in coordinates])
+        if type(coordinates[0]) in [list, tuple]:
+            west = min([c[0] for c in coordinates])
+            east = max([c[0] for c in coordinates])
+            north = max([c[1] for c in coordinates])
+            south = min([c[1] for c in coordinates])
+            min_height = min([c[2] for c in coordinates])
+            max_height = max([c[2] for c in coordinates])
+        else:
+            west = coordinates[0]
+            east = coordinates[0]
+            north = coordinates[1]
+            south = coordinates[1]
+            min_height = coordinates[2]
+            max_height = coordinates[2]
 
-        self.bounding_volume['minimum_height'] = min(self.bounding_volume['minimum_height'], min_height)
-        self.bounding_volume['maximum_height'] = min(self.bounding_volume['maximum_height'], max_height)
+        self.bounding_volume['west'] = west if self.bounding_volume['west'] is None else min(
+            self.bounding_volume['west'], west)
+        self.bounding_volume['east'] = east if self.bounding_volume['east'] is None else max(
+            self.bounding_volume['east'], east)
+        self.bounding_volume['north'] = north if self.bounding_volume['north'] is None else max(
+            self.bounding_volume['north'], north)
+        self.bounding_volume['south'] = south if self.bounding_volume['south'] is None else min(
+            self.bounding_volume['south'], south)
+        self.bounding_volume['minimum_height'] = min_height if self.bounding_volume['minimum_height'] is None else min(
+            self.bounding_volume['minimum_height'], min_height)
+        self.bounding_volume['maximum_height'] = max_height if self.bounding_volume['maximum_height'] is None else max(
+            self.bounding_volume['maximum_height'], max_height)
 
     def create_batch_table(self) -> {}:
         batch_table = {}
@@ -354,8 +401,8 @@ class VectorTile(object):
         polygon_indices = []
         polygon_coordinates_count = []
         polygon_index_counts = []
-        prepared_polygons = {'positions_buffer': packEntry('B', 0),
-                             'indices_buffer': packEntry('B', 0),
+        prepared_polygons = {'positions_buffer': None,
+                             'indices_buffer': None,
                              'counts': [],
                              'indexCounts': []}
 
@@ -383,7 +430,7 @@ class VectorTile(object):
         polyline_coordinates = []
         polyline_coordinates_count = []
 
-        prepared_polyline = {'positions_buffer': packEntry('B', 0),
+        prepared_polyline = {'positions_buffer': None,
                              'counts': []}
 
         if len(self.polylines) == 0:
@@ -401,12 +448,12 @@ class VectorTile(object):
         return prepared_polyline
 
     def prepare_points(self):
-        prepared_point = {'positions_buffer': packEntry('B', 0),
-                          'property_name': 'POSITION_QUANTIZED'}
+        prepared_points = {'positions_buffer': None,
+                           'property_name': 'POSITION_QUANTIZED'}
 
-        u_buffer = ""
-        v_buffer = ""
-        h_buffer = ""
+        u_buffer = packEntry('I', 0);
+        v_buffer = packEntry('I', 0);
+        h_buffer = packEntry('I', 0);
         last_v = 0
         last_u = 0
         last_h = 0
@@ -418,17 +465,17 @@ class VectorTile(object):
             zig_zag_u = zigZagEncode(u - last_u)
             zig_zag_v = zigZagEncode(v - last_v)
             zig_zag_h = zigZagEncode(h - last_h)
-            u_buffer += packEntry('B', zig_zag_u)
-            v_buffer += packEntry('B', zig_zag_v)
-            h_buffer += packEntry('B', zig_zag_h)
+            u_buffer += packEntry('I', zig_zag_u)
+            v_buffer += packEntry('I', zig_zag_v)
+            h_buffer += packEntry('I', zig_zag_h)
 
             last_u = u
             last_v = v
             last_h = h
 
-        prepared_point['positions_buffer'] = u_buffer + v_buffer + h_buffer
+        prepared_points['positions_buffer'] = u_buffer + v_buffer + h_buffer
 
-        return prepared_point
+        return prepared_points
 
     def _encode_polygon_positions(self, polygon_coordinates):
         u_buffer = ""
