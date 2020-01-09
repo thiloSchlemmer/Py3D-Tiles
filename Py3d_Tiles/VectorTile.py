@@ -108,6 +108,7 @@ class VectorTile(object):
                                 'minimum_height': None,
                                 'maximum_height': None
                                 }
+        self.batch_table = {}
 
     def from_bytes_io(self, f):
         # Header
@@ -139,7 +140,7 @@ class VectorTile(object):
                                 'minimum_height': self.featureTable['MINIMUM_HEIGHT'],
                                 'maximum_height': self.featureTable['MAXIMUM_HEIGHT']
                                 }
-        batch_table_json = None
+
         batch_table_bytes = b''
         batch_table_json_byte_length = self.header['batchTableJsonByteLength']
         print("reading BatchTable...")
@@ -147,6 +148,7 @@ class VectorTile(object):
             batch_table_bytes += unpackEntry(f, 's')
         batch_table_json = json.loads(batch_table_bytes.decode('utf-8'))
         print("...Found {} Properties".format(len(batch_table_json.keys())))
+        self.batch_table = batch_table_json
         print("done")
 
         indices_bytes_length = self.header['indicesByteLength']
@@ -313,22 +315,25 @@ class VectorTile(object):
             self.featureTable['POLYLINE_COUNTS'] = polyline_positions_container['counts']
 
         feature_table_json = json.dumps(self.featureTable)
-        feature_table_binary = packEntry("I", 0)
-        batch_table_json = json.dumps(self.create_batch_table())
-        batch_table_binary = packEntry("I", 0)
+        feature_table_binary = None
+        self.batch_table = self.create_batch_table()
+        batch_table_json = json.dumps(self.batch_table)
+        batch_table_binary = None
 
         indices_binary_byte_length = 0 if indices_binary is None else len(indices_binary)
+        feature_table_binary_length = 0 if feature_table_binary is None else len(feature_table_binary)
+        batch_table_binary_length = 0 if batch_table_binary is None else len(batch_table_binary)
         self.header['byteLength'] = VectorTile.header_byte_length + \
                                     utf8_byte_len(feature_table_json) + \
-                                    len(feature_table_binary) + \
+                                    feature_table_binary_length + \
                                     utf8_byte_len(batch_table_json) + \
-                                    len(batch_table_binary) + \
+                                    batch_table_binary_length + \
                                     indices_binary_byte_length
 
         self.header['featureTableJsonByteLength'] = utf8_byte_len(feature_table_json)
-        self.header['featureTableBinaryByteLength'] = len(feature_table_binary)
+        self.header['featureTableBinaryByteLength'] = feature_table_binary_length
         self.header['batchTableJsonByteLength'] = utf8_byte_len(batch_table_json)
-        self.header['batchTableBinaryByteLength'] = len(batch_table_binary)
+        self.header['batchTableBinaryByteLength'] = batch_table_binary_length
         self.header['indicesByteLength'] = indices_binary_byte_length
         self.header['polygonPositionsByteLength'] = 0 if polygon_positions is None else int(len(polygon_positions) / 2)
         self.header['polylinePositionsByteLength'] = 0 if polyline_positions is None else int(
@@ -343,9 +348,11 @@ class VectorTile(object):
             f.write(packEntry(type_format, entry))
 
         f.write(bytes(feature_table_json, 'utf-8'))
-        f.write(feature_table_binary)
+        if feature_table_binary is not None:
+            f.write(feature_table_binary)
         f.write(bytes(batch_table_json, 'utf-8'))
-        f.write(batch_table_binary)
+        if batch_table_binary is not None:
+            f.write(batch_table_binary)
         if indices_binary is not None:
             f.write(indices_binary)
         if polygon_positions is not None:
@@ -549,11 +556,14 @@ class VectorTile(object):
         delta_longitude = longitude - bounds_and_origins['origin_longitude']
         delta_latitude = latitude - bounds_and_origins['origin_latitude']
         delta_height = height - bounds_and_origins['origin_height']
-        v = math.floor((delta_latitude * UV_RANGE) / bounds_and_origins['bounding_latitude'])
+
+        v = 0 if bounds_and_origins['bounding_latitude'] == 0 else math.floor(
+            (delta_latitude * UV_RANGE) / bounds_and_origins['bounding_latitude'])
         if math.isnan(v):
             v = 0
 
-        u = math.floor((delta_longitude * UV_RANGE) / bounds_and_origins['bounding_longitude'])
+        u = 0 if bounds_and_origins['bounding_longitude'] == 0 else math.floor(
+            (delta_longitude * UV_RANGE) / bounds_and_origins['bounding_longitude'])
         if math.isnan(u):
             u = 0
 

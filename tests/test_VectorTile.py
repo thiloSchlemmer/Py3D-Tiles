@@ -44,6 +44,7 @@ class TestVectorTile(unittest.TestCase):
         actual_point_positions_byte_length = header['pointPositionsByteLength']
 
         print(vector_tile.featureTable)
+        print(vector_tile.batch_table)
         # assert
         self.assertEquals(actual_magic, expected_magic)
         self.assertEquals(actual_byte_length, expected_byte_length)
@@ -66,10 +67,10 @@ class TestVectorTile(unittest.TestCase):
     def test_toFile_expectOnePointFeature(self):
         # arrange
         expected_magic = b'vctr'
-        expected_byte_length = 324
-        expected_feature_table_json_byte_length = 352
+        expected_byte_length = 454
+        expected_feature_table_json_byte_length = 316
         expected_feature_table_binary_byte_length = 0
-        expected_batch_table_json_byte_length = 88
+        expected_batch_table_json_byte_length = 94
         expected_batch_table_binary_byte_length = 0
         expected_indices_byte_length = 0
         expected_polygon_positions_byte_length = 0
@@ -86,7 +87,7 @@ class TestVectorTile(unittest.TestCase):
                        }
 
         # act
-        vector_tile = VectorTile(None)
+        vector_tile = VectorTile(None, property_names_to_publish=["name","class","align","objektart"])
         vector_tile.add_feature(one_feature)
         vector_tile.to_file(self.vector_temp_file_path, gzipped=False)
 
@@ -105,6 +106,7 @@ class TestVectorTile(unittest.TestCase):
         actual_point_positions_byte_length = header['pointPositionsByteLength']
 
         print(vector_tile.featureTable)
+        print(vector_tile.batch_table)
         # assert
         self.assertEquals(actual_magic, expected_magic)
         self.assertEquals(actual_byte_length, expected_byte_length)
@@ -123,6 +125,3 @@ class TestVectorTile(unittest.TestCase):
                           expected_polyline_positions_byte_length)
         self.assertEquals(actual_point_positions_byte_length,
                           expected_point_positions_byte_length)
-
-        # assert
-        self.assertTrue(False)
