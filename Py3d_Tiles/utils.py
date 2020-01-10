@@ -234,3 +234,11 @@ def collapseIntoTriangles(coords):
 
 def utf8_byte_len(s):
     return len(s.encode('utf-8'))
+
+
+def radian_to_degree(radian):
+    return radian * 180 / math.pi
+
+
+def degree_to_radian(degree):
+    return degree * math.pi / 180

@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from Py3d_Tiles import earcut
 from .utils import unpackEntry, ungzipFileObject, gzipFileObject, packEntry, clamp, zigZagEncode, utf8_byte_len, \
-    zigZagDecode
+    zigZagDecode, radian_to_degree
 
 MIN = 0.0
 MAX = 32767.0
@@ -92,7 +92,10 @@ class VectorTile(object):
 
         self.extent = tile_extent
 
-        self.features = []
+        self.point_features = []
+        self.polyline_features = []
+        self.polygon_features = []
+
         self.points = []
         self.polylines = []
         self.polygons = []
@@ -164,40 +167,74 @@ class VectorTile(object):
         print("done")
 
         print("reading Positions...")
-        polygon_u = []
-        polygon_v = []
+
         polygon_positions_byte_length = self.header['polygonPositionsByteLength']
+        polygon_count = polygon_positions_byte_length / 8
+        if polygon_count != self.featureTable['POLYGONS_LENGTH']:
+            polygon_count = self.featureTable['POLYGONS_LENGTH']
+        if polygon_positions_byte_length != 0:
+            polygon_u = []
+            polygon_v = []
+            for ud in unpack_and_decode_position(f, polygon_count, 'H'):
+                polygon_u.append(ud)
+            for vd in unpack_and_decode_position(f, polygon_count, 'H'):
+                polygon_v.append(vd)
 
-        for ud in unpack_and_decode_position(f, polygon_positions_byte_length / 8, 'H'):
-            polygon_u.append(ud)
-        for vd in unpack_and_decode_position(f, polygon_positions_byte_length / 8, 'H'):
-            polygon_v.append(vd)
+            for i in range(len(polygon_u)):
+                u = polygon_u[i]
+                v = polygon_v[i]
+                rad_longitude = (u * self.bounding_volume['west']) + self.bounding_volume['west']
+                rad_latitude = (v * self.bounding_volume['south']) + self.bounding_volume['south']
 
-        polyline_u = []
-        polyline_v = []
-        polyline_h = []
+                self.polygons.append([rad_longitude, rad_latitude])
+
         polyline_positions_byte_length = self.header['polylinePositionsByteLength']
-        for ud in unpack_and_decode_position(f, polyline_positions_byte_length / 8, 'H'):
-            polyline_u.append(ud)
-        for vd in unpack_and_decode_position(f, polyline_positions_byte_length / 8, 'H'):
-            polyline_v.append(vd)
-        for hd in unpack_and_decode_position(f, polyline_positions_byte_length / 8, 'H'):
-            polyline_h.append(hd)
+        polyline_count = polyline_positions_byte_length / 8
+        if polyline_count != self.featureTable['POLYLINES_LENGTH']:
+            polyline_count = self.featureTable['POLYLINES_LENGTH']
+        if polyline_positions_byte_length != 0:
+            polyline_u = []
+            polyline_v = []
+            polyline_h = []
+            for ud in unpack_and_decode_position(f, polyline_count, 'H'):
+                polyline_u.append(ud)
+            for vd in unpack_and_decode_position(f, polyline_count, 'H'):
+                polyline_v.append(vd)
+            for hd in unpack_and_decode_position(f, polyline_count, 'H'):
+                polyline_h.append(hd)
 
-        point_u = []
-        point_v = []
-        point_h = []
+            for i in range(len(polyline_u)):
+                u = polyline_u[i]
+                v = polyline_v[i]
+                h = polyline_h[i]
+                rad_longitude = (u * self.bounding_volume['west']) + self.bounding_volume['west']
+                rad_latitude = (v * self.bounding_volume['south']) + self.bounding_volume['south']
+                rad_height = (h * self.bounding_volume['minimum_height']) + self.bounding_volume['minimum_height']
+
+                self.polylines.append([rad_longitude, rad_latitude, rad_height])
+
         point_positions_byte_length = self.header['pointPositionsByteLength']
-        for ud in unpack_and_decode_position(f, point_positions_byte_length / 8, 'H'):
-            point_u.append(ud)
-        for vd in unpack_and_decode_position(f, point_positions_byte_length / 8, 'H'):
-            point_v.append(vd)
-        for hd in unpack_and_decode_position(f, point_positions_byte_length / 8, 'H'):
-            point_h.append(hd)
+        point_count = point_positions_byte_length / 8
+        if point_count != self.featureTable['POINTS_LENGTH']:
+            point_count = self.featureTable['POINTS_LENGTH']
+        if point_positions_byte_length:
+            point_u = []
+            point_v = []
+            point_h = []
+            for ud in unpack_and_decode_position(f, point_count, 'H'):
+                point_u.append(ud)
+            for vd in unpack_and_decode_position(f, point_count, 'H'):
+                point_v.append(vd)
+            for hd in unpack_and_decode_position(f, point_count, 'H'):
+                point_h.append(hd)
 
-        print(point_u)
-        print(point_v)
-        print(point_h)
+            for i in range(len(point_u)):
+                uvh = point_u[i], point_v[i], point_h[i]
+                rad_longitude, rad_latitude, height = self._decode_point_position(uvh)
+
+                longitude = radian_to_degree(rad_longitude)
+                latitude = radian_to_degree(rad_latitude)
+                self.points.append([longitude, latitude, height])
 
     def from_file(self, file_path, gzipped=False):
         """
@@ -233,13 +270,13 @@ class VectorTile(object):
         self._update_extent(coordinates)
 
         if geometry_type == "Point":
-            self.points.append(feature)
+            self.point_features.append(feature)
             self.featureTable['POINTS_LENGTH'] += 1
         elif geometry_type == "LineString":
-            self.polylines.append(feature)
+            self.polyline_features.append(feature)
             self.featureTable['POLYLINES_LENGTH'] += 1
         elif geometry_type == "Polygon":
-            self.polygons.append(feature)
+            self.polygon_features.append(feature)
             self.featureTable['POLYGONS_LENGTH'] += 1
         else:
             raise ValueError("Geometry-Type {} is not supported.".format(geometry_type))
@@ -395,9 +432,9 @@ class VectorTile(object):
         batch_table = {}
 
         for property_name in self.property_names_to_publish:
-            values = [f["properties"][property_name] for f in self.points] + \
-                     [f["properties"][property_name] for f in self.polylines] + \
-                     [f["properties"][property_name] for f in self.polygons]
+            values = [f["properties"][property_name] for f in self.point_features] + \
+                     [f["properties"][property_name] for f in self.polyline_features] + \
+                     [f["properties"][property_name] for f in self.polygon_features]
 
             batch_table[property_name] = values
 
@@ -413,10 +450,10 @@ class VectorTile(object):
                              'counts': [],
                              'indexCounts': []}
 
-        if len(self.polygons) == 0:
+        if len(self.polygon_features) == 0:
             return prepared_polygons
 
-        for feature in self.polygons:
+        for feature in self.polygon_features:
             coordinates = feature["geometry"]["coordinates"]
             coordinates2d = [[c[0], c[1]] for c in coordinates]
             data = earcut.flatten(coordinates2d)
@@ -437,56 +474,60 @@ class VectorTile(object):
         polyline_coordinates = []
         polyline_coordinates_count = []
 
-        prepared_polyline = {'positions_buffer': None,
-                             'counts': []}
+        prepared_polylines = {'positions_buffer': None,
+                              'counts': []}
 
-        if len(self.polylines) == 0:
-            return prepared_polyline
+        if len(self.polyline_features) == 0:
+            return prepared_polylines
 
-        for feature in self.polylines:
+        for feature in self.polyline_features:
             coordinates = feature["geometry"]["coordinates"]
             data = earcut.flatten(coordinates)
             polyline_coordinates.extend(data['vertices'])
             polyline_coordinates_count.append(len(data['vertices']))
 
-        prepared_polyline['positions_buffer'] = self._encode_polyline_positions(polyline_coordinates)
-        prepared_polyline['counts'] = polyline_coordinates_count
+        prepared_polylines['positions_buffer'] = self._encode_polyline_positions(polyline_coordinates)
+        prepared_polylines['counts'] = polyline_coordinates_count
 
-        return prepared_polyline
+        return prepared_polylines
 
     def prepare_points(self):
         prepared_points = {'positions_buffer': None,
                            'property_name': 'POSITION_QUANTIZED'}
 
-        u_buffer = packEntry('I', 0);
-        v_buffer = packEntry('I', 0);
-        h_buffer = packEntry('I', 0);
+        u_buffer = None
+        v_buffer = None
+        h_buffer = None
         last_v = 0
         last_u = 0
         last_h = 0
 
-        for feature in self.points:
+        for feature in self.point_features:
             coordinate = feature["geometry"]["coordinates"]
             u, v, h = self._encode_point_position(coordinate)
 
             zig_zag_u = zigZagEncode(u - last_u)
             zig_zag_v = zigZagEncode(v - last_v)
             zig_zag_h = zigZagEncode(h - last_h)
-            u_buffer += packEntry('I', zig_zag_u)
-            v_buffer += packEntry('I', zig_zag_v)
-            h_buffer += packEntry('I', zig_zag_h)
+            u_buffer = packEntry('I', zig_zag_u) if u_buffer is None else u_buffer + packEntry('I', zig_zag_u)
+            v_buffer = packEntry('I', zig_zag_v) if v_buffer is None else v_buffer + packEntry('I', zig_zag_v)
+            h_buffer = packEntry('I', zig_zag_h) if h_buffer is None else h_buffer + packEntry('I', zig_zag_h)
 
             last_u = u
             last_v = v
             last_h = h
+            u_buffer_length = len(u_buffer)
+            print(u_buffer_length)
 
-        prepared_points['positions_buffer'] = u_buffer + v_buffer + h_buffer
+        positions_buffer = u_buffer + v_buffer + h_buffer
+        print(len(positions_buffer))
+        prepared_points['positions_buffer'] = positions_buffer
 
         return prepared_points
 
     def _encode_polygon_positions(self, polygon_coordinates):
-        u_buffer = ""
-        v_buffer = ""
+        u_buffer = None
+        v_buffer = None
         last_v = 0
         last_u = 0
         for c in polygon_coordinates:
@@ -500,8 +541,8 @@ class VectorTile(object):
 
             zig_zag_u = zigZagEncode(u - last_u)
             zig_zag_v = zigZagEncode(v - last_v)
-            u_buffer += packEntry('B', zig_zag_u)
-            v_buffer += packEntry('B', zig_zag_v)
+            u_buffer = packEntry('I', zig_zag_u) if u_buffer is None else u_buffer + packEntry('I', zig_zag_u)
+            v_buffer = packEntry('I', zig_zag_v) if v_buffer is None else v_buffer + packEntry('I', zig_zag_v)
 
             last_u = u
             last_v = v
@@ -509,9 +550,9 @@ class VectorTile(object):
         return u_buffer + v_buffer
 
     def _encode_polyline_positions(self, polyline_coordinates):
-        u_buffer = ""
-        v_buffer = ""
-        h_buffer = ""
+        u_buffer = None
+        v_buffer = None
+        h_buffer = None
         last_v = 0
         last_u = 0
         last_h = 0
@@ -536,9 +577,9 @@ class VectorTile(object):
             zig_zag_u = zigZagEncode(u - last_u)
             zig_zag_v = zigZagEncode(v - last_v)
             zig_zag_h = zigZagEncode(h - last_h)
-            u_buffer += packEntry('B', zig_zag_u)
-            v_buffer += packEntry('B', zig_zag_v)
-            h_buffer += packEntry('B', zig_zag_h)
+            u_buffer = packEntry('I', zig_zag_u) if u_buffer is None else u_buffer + packEntry('I', zig_zag_u)
+            v_buffer = packEntry('I', zig_zag_v) if v_buffer is None else v_buffer + packEntry('I', zig_zag_v)
+            h_buffer = packEntry('I', zig_zag_h) if h_buffer is None else h_buffer + packEntry('I', zig_zag_h)
 
             last_u = u
             last_v = v
@@ -572,6 +613,15 @@ class VectorTile(object):
         else:
             h = math.floor((delta_height * UV_RANGE) / bounds_and_origins['bounding_height'])
             return u, v, h
+
+    def _decode_point_position(self, uvh):
+        u, v, h = uvh
+
+        bounds_and_origins = self._get_bounds_and_origin(self.bounding_volume)
+        longitude = (u/UV_RANGE) * bounds_and_origins['bounding_longitude'] + bounds_and_origins['origin_longitude']
+        latitude = (v/UV_RANGE) * bounds_and_origins['bounding_latitude'] + bounds_and_origins['origin_latitude']
+        height = h * bounds_and_origins['bounding_height'] + bounds_and_origins['origin_height']
+        return longitude, latitude, height
 
     @staticmethod
     def _get_bounds_and_origin(bounding_volume):
