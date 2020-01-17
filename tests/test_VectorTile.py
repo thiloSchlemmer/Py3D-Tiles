@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
+import json
 import os
 import unittest
-from Py3d_Tiles.VectorTile import VectorTile
+from Py3d_Tiles.VectorTile import VectorTile, VectorTileFactory
 
 
 class TestVectorTile(unittest.TestCase):
@@ -73,15 +74,12 @@ class TestVectorTile(unittest.TestCase):
         one_feature = {"type": "Feature",
                        "geometry": {"type": "Point",
                                     "coordinates": [9.6718497312, 50.4135642177, -9999.0000353837]},
-                       "properties": {"srs": "EPSG:25832",
-                                      "objektart": "ortsname",
-                                      "class": "37.5",
-                                      "name": "Hühnerfarm",
-                                      "align": "Left"},
+                       "properties": {"foo": "baz",
+                                      "bar": "37.5"},
                        }
 
         # act
-        vector_tile = VectorTile(None, property_names_to_publish=["name", "class", "align", "objektart"])
+        vector_tile = VectorTile(None, property_names_to_publish=["foo", "bar"])
         vector_tile.add_feature(one_feature)
         vector_tile.to_file(self.vector_temp_file_path, gzipped=False)
 
@@ -96,23 +94,19 @@ class TestVectorTile(unittest.TestCase):
         features = [{"type": "Feature",
                      "geometry": {"type": "Point",
                                   "coordinates": [9.6718497312, 50.4135642177, -9999.0000353837]},
-                     "properties": {"objektart": "ortsname",
-                                    "class": "37.5",
-                                    "name": "Hühnerfarm",
-                                    "align": "Left"},
+                     "properties": {"foo": "baz",
+                                    "bar": "37.5"},
                      },
                     {"type": "Feature",
                      "geometry": {"type": "Point",
                                   "coordinates": [12.9135709195, 49.0548060332, 449.3999660118]},
-                     "properties": {"objektart": "gemeindeteil",
-                                    "class": "8",
-                                    "name": "Eging",
-                                    "align": "Left"},
+                     "properties": {"foo": "baz",
+                                    "bar": "8",},
                      }
                     ]
 
         # act
-        vector_tile = VectorTile(None, property_names_to_publish=["name", "class", "align", "objektart"])
+        vector_tile = VectorTile(None, property_names_to_publish=["foo", "bar"])
         for feature in features:
             vector_tile.add_feature(feature)
         vector_tile.to_file(self.vector_temp_file_path, gzipped=False)

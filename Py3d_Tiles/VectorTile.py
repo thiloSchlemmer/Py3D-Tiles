@@ -8,7 +8,7 @@ from collections import OrderedDict
 
 from Py3d_Tiles import earcut
 from .utils import unpackEntry, ungzipFileObject, gzipFileObject, packEntry, clamp, zigZagEncode, utf8_byte_len, \
-    zigZagDecode, radian_to_degree
+    zigZagDecode, radian_to_degree, degree_to_radian
 
 MIN = 0.0
 MAX = 32767.0
@@ -47,6 +47,175 @@ def get_string_padded(s, padding_size):
     return s + ' ' * padding
 
 
+def _add_region(region, parent):
+    if parent:
+        return {'west': min(region["west"], parent["west"]),
+                'south': min(region["south"], parent["south"]),
+                'east': max(region["east"], parent["east"]),
+                'north': max(region["north"], parent["north"]),
+                'min_height': min(region["min_height"], parent["min_height"]),
+                'max_height': max(region["max_height"], parent["max_height"]),
+                }
+    else:
+        return region
+
+
+def read_geojson(geojson_path):
+    with open(geojson_path, mode='r') as f:
+        features = json.load(f)["features"]
+    return features
+
+
+class VectorTileFactory(object):
+    GEOMETRIC_ERRORS = {
+        4: 77067.3397799586,
+        5: 38533.66989,
+        6: 19266.83494,
+        7: 9633.417472,
+        8: 4816.708736247414,
+        9: 2408.354368123707,
+        10: 1204.1771840618535,
+        11: 602.0885920309267,
+        12: 301.0442960154634,
+        13: 150.5221480077317,
+        14: 75.26107400386584,
+        15: 37.63053700193292,
+        16: 18.81526850096646,
+        17: 9.40763425048323}
+
+    def __init__(self, metadata_path, source_path, destination_path):
+        self.tileset_count = 0
+        self.metadata = None
+        self.source_path = source_path
+        self.destination_path = destination_path
+
+        assert os.path.exists(metadata_path) & os.path.isfile(metadata_path)
+        assert os.path.exists(self.source_path) & os.path.isdir(self.source_path)
+        assert os.path.exists(self.destination_path) & os.path.isdir(self.destination_path)
+
+        with open(metadata_path, mode='r') as f:
+            self.metadata = json.load(f)
+
+    def _create_tileset_path(self):
+        tileset_name = "tileset.json"
+        if 0 < self.tileset_count:
+            tileset_name = "tileset_{}.json".format(self.tileset_count)
+
+        self.tileset_count += 1
+
+        return os.path.join(self.destination_path, tileset_name)
+
+    def create_tileset(self):
+        self._create_tileset(self.metadata)
+
+    def _create_tileset(self, data, node_limit=400, node_count=0):
+        # build tileset json
+        children = data["children"]
+
+        tileset_node, child_node_count = self._add_tiles(data, node_limit, node_count + len(children))
+        root = tileset_node
+
+        tileset_data = {
+            "asset": {
+                "version": '1.0',
+                "tilesetVersion": '1.0'
+            },
+            "geometricError": root["geometricError"],
+            "root": root
+        }
+
+        tileset_name = self._save_tileset(tileset_data)
+        nodes = {"boundingVolume": {"region": root["boundingVolume"]["region"]},
+                 "geometricError": root["geometricError"],
+                 "refine": "ADD",
+                 "content": {"url": tileset_name}}
+        return nodes
+
+    def _add_tiles(self, data, node_limit, node_count):
+        # build nodes from data
+        tile = data['tile']
+        region = data['bounds']
+        z, x, y = tile[0], tile[1], tile[2]
+
+        children = data["children"]
+        current_node_count = node_count + len(children)
+
+        aggregated_region = None
+        child_nodes = []
+
+        if current_node_count <= node_limit:
+            for child in children:
+                if current_node_count <= node_limit:
+                    child_node, child_node_count = self._add_tiles(child, node_limit=node_limit,
+                                                                   node_count=current_node_count)
+                    child_region = child_node["boundingVolume"]["region"]
+                    if child_region:
+                        aggregated_region = _add_region(child_region, aggregated_region)
+                        child_nodes.append(child_node)
+                        current_node_count += child_node_count
+                else:
+                    child_node = self._create_tileset(child, node_limit, current_node_count)
+                    child_region = child_node["boundingVolume"]["region"]
+                    if child_region:
+                        aggregated_region = _add_region(child_region, aggregated_region)
+                        child_nodes.append(child_node)
+        else:
+            for child in children:
+                child_node = self._create_tileset(child, node_limit, current_node_count)
+                child_region = child_node["boundingVolume"]["region"]
+                if child_region:
+                    aggregated_region = _add_region(child_region, aggregated_region)
+                    child_nodes.append(child_node)
+
+        nodes = None
+        if tile != 'root':
+            tile_extent = {'west': degree_to_radian(region[0]),
+                           'south': degree_to_radian(region[1]),
+                           'east': degree_to_radian(region[2]),
+                           'north': degree_to_radian(region[3]),
+                           }
+            tile_region = {'west': degree_to_radian(region[0]),
+                           'south': degree_to_radian(region[1]),
+                           'east': degree_to_radian(region[2]),
+                           'north': degree_to_radian(region[3]),
+                           'min_height': region[4],
+                           'max_height': region[5],
+                           }
+            output_filename = "{}_{}_{}.vctr".format(z, x, y)
+            geojson_path = os.path.join(self.source_path, "{}_{}_{}.json".format(z, x, y))
+            vctr_path = os.path.join(self.destination_path, output_filename)
+            if os.path.exists(geojson_path) & os.path.isfile(geojson_path):
+                vctr_tile = VectorTile(tile_extent)
+                features = read_geojson(geojson_path)
+                for feature in features:
+                    vctr_tile.add_feature(feature)
+
+                if os.path.exists(vctr_path):
+                    os.remove(vctr_path)
+                vctr_tile.to_file(vctr_path)
+
+            nodes = {"boundingVolume": {"region": tile_region},
+                     "geometricError": VectorTileFactory.GEOMETRIC_ERRORS[z],
+                     "refine": "ADD",
+                     "content": {"url": output_filename}}
+
+        else:
+            nodes = {"boundingVolume": {
+                "region": aggregated_region
+            },
+                "geometricError": 4816.708736247414,
+                "refine": "ADD",
+                "children": child_nodes}
+
+        return nodes, current_node_count
+
+    def _save_tileset(self, tileset_data):
+        tileset_json_path = self._create_tileset_path()
+        with open(tileset_json_path, mode='w') as f:
+            json.dump(tileset_data, f)
+        return os.path.basename(tileset_json_path)
+
+
 class VectorTile(object):
     VECTOR_TILE_VERSION = 1
     VECTOR_TILE_MAGIC = "vctr"
@@ -79,6 +248,7 @@ class VectorTile(object):
                              'REGION': [0, 0, 0, 0, 0, 0]}
 
     def __init__(self, tile_extent, property_names_to_publish=None):
+        self.existing_property_names = set()
         if property_names_to_publish is None:
             property_names_to_publish = []
         if tile_extent is None:
@@ -268,7 +438,7 @@ class VectorTile(object):
         coordinates = geometry["coordinates"]
 
         self._update_extent(coordinates)
-
+        self._register_property_name(feature)
         if geometry_type == "Point":
             self.point_features.append(feature)
             self.featureTable['POINTS_LENGTH'] += 1
@@ -432,9 +602,10 @@ class VectorTile(object):
         batch_table = {}
 
         for property_name in self.property_names_to_publish:
-            values = [f["properties"][property_name] for f in self.point_features] + \
-                     [f["properties"][property_name] for f in self.polyline_features] + \
-                     [f["properties"][property_name] for f in self.polygon_features]
+            if property_name in self.existing_property_names:
+                values = [f["properties"][property_name] for f in self.polygon_features] + \
+                         [f["properties"][property_name] for f in self.polyline_features] + \
+                         [f["properties"][property_name] for f in self.point_features]
 
             batch_table[property_name] = values
 
@@ -618,8 +789,8 @@ class VectorTile(object):
         u, v, h = uvh
 
         bounds_and_origins = self._get_bounds_and_origin(self.bounding_volume)
-        longitude = (u/UV_RANGE) * bounds_and_origins['bounding_longitude'] + bounds_and_origins['origin_longitude']
-        latitude = (v/UV_RANGE) * bounds_and_origins['bounding_latitude'] + bounds_and_origins['origin_latitude']
+        longitude = (u / UV_RANGE) * bounds_and_origins['bounding_longitude'] + bounds_and_origins['origin_longitude']
+        latitude = (v / UV_RANGE) * bounds_and_origins['bounding_latitude'] + bounds_and_origins['origin_latitude']
         height = h * bounds_and_origins['bounding_height'] + bounds_and_origins['origin_height']
         return longitude, latitude, height
 
@@ -633,3 +804,8 @@ class VectorTile(object):
                 'origin_latitude': bounding_volume['south'],
                 'origin_height': bounding_volume['minimum_height']
                 }
+
+    def _register_property_name(self, feature):
+        properties = feature["properties"]
+        for property_name in properties.keys():
+            self.existing_property_names.add(property_name)
