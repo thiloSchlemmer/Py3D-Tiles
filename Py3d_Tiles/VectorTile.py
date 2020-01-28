@@ -36,7 +36,7 @@ def unpack_and_decode_position(f, elementCount, structType, dimension=2):
         i += 1
 
 
-def get_string_padded(s, padding_size):
+def get_string_padded(s, padding_size=8):
     byte_offset = 0
     boundary = padding_size
 
@@ -49,13 +49,13 @@ def get_string_padded(s, padding_size):
 
 def _add_region(region, parent):
     if parent:
-        return {'west': min(region["west"], parent["west"]),
-                'south': min(region["south"], parent["south"]),
-                'east': max(region["east"], parent["east"]),
-                'north': max(region["north"], parent["north"]),
-                'min_height': min(region["min_height"], parent["min_height"]),
-                'max_height': max(region["max_height"], parent["max_height"]),
-                }
+        return [min(region[0], parent[0]),
+                min(region[1], parent[1]),
+                max(region[2], parent[2]),
+                max(region[3], parent[3]),
+                min(region[4], parent[4]),
+                max(region[5], parent[5]),
+                ]
     else:
         return region
 
@@ -63,6 +63,8 @@ def _add_region(region, parent):
 def read_geojson(geojson_path):
     with open(geojson_path, mode='r') as f:
         features = json.load(f)["features"]
+
+    print("Reading {} features from geojson '{}':".format(len(features), geojson_path))
     return features
 
 
@@ -83,15 +85,17 @@ class VectorTileFactory(object):
         16: 18.81526850096646,
         17: 9.40763425048323}
 
-    def __init__(self, metadata_path, source_path, destination_path):
+    def __init__(self, metadata_path, source_path, destination_path, property_names_to_publish=None):
         self.tileset_count = 0
         self.metadata = None
         self.source_path = source_path
         self.destination_path = destination_path
+        self.property_names_to_publish = property_names_to_publish
+
+        os.makedirs(self.destination_path, exist_ok=True)
 
         assert os.path.exists(metadata_path) & os.path.isfile(metadata_path)
         assert os.path.exists(self.source_path) & os.path.isdir(self.source_path)
-        assert os.path.exists(self.destination_path) & os.path.isdir(self.destination_path)
 
         with open(metadata_path, mode='r') as f:
             self.metadata = json.load(f)
@@ -105,13 +109,13 @@ class VectorTileFactory(object):
 
         return os.path.join(self.destination_path, tileset_name)
 
-    def create_tileset(self):
-        self._create_tileset(self.metadata)
+    def create_tileset(self, node_limit=400):
+        self._create_tileset(self.metadata, node_limit)
 
-    def _create_tileset(self, data, node_limit=400, node_count=0):
+    def _create_tileset(self, data, node_limit, node_count=0):
         # build tileset json
         children = data["children"]
-
+        tileset_json_path = self._create_tileset_path()
         tileset_node, child_node_count = self._add_tiles(data, node_limit, node_count + len(children))
         root = tileset_node
 
@@ -124,17 +128,22 @@ class VectorTileFactory(object):
             "root": root
         }
 
-        tileset_name = self._save_tileset(tileset_data)
+        tileset_name = self._save_tileset(tileset_data, tileset_json_path)
         nodes = {"boundingVolume": {"region": root["boundingVolume"]["region"]},
                  "geometricError": root["geometricError"],
                  "refine": "ADD",
-                 "content": {"url": tileset_name}}
+                 "content": {"uri": tileset_name}}
         return nodes
 
     def _add_tiles(self, data, node_limit, node_count):
         # build nodes from data
         tile = data['tile']
-        region = data['bounds']
+        region = [degree_to_radian(data['bounds'][0]),
+                  degree_to_radian(data['bounds'][1]),
+                  degree_to_radian(data['bounds'][2]),
+                  degree_to_radian(data['bounds'][3]),
+                  data['bounds'][4],
+                  data['bounds'][5]]
         z, x, y = tile[0], tile[1], tile[2]
 
         children = data["children"]
@@ -169,23 +178,28 @@ class VectorTileFactory(object):
 
         nodes = None
         if tile != 'root':
-            tile_extent = {'west': degree_to_radian(region[0]),
-                           'south': degree_to_radian(region[1]),
-                           'east': degree_to_radian(region[2]),
-                           'north': degree_to_radian(region[3]),
+            tile_extent = {'west': region[0],
+                           'south': region[1],
+                           'east': region[2],
+                           'north': region[3],
                            }
-            tile_region = {'west': degree_to_radian(region[0]),
-                           'south': degree_to_radian(region[1]),
-                           'east': degree_to_radian(region[2]),
-                           'north': degree_to_radian(region[3]),
-                           'min_height': region[4],
-                           'max_height': region[5],
-                           }
+            tile_region = [region[0],
+                           region[1],
+                           region[2],
+                           region[3],
+                           region[4],
+                           region[5]
+                           ]
+            nodes = {"boundingVolume": {"region": tile_region},
+                     "geometricError": VectorTileFactory.GEOMETRIC_ERRORS[z],
+                     "refine": "ADD",
+                     "children": child_nodes}
+
             output_filename = "{}_{}_{}.vctr".format(z, x, y)
             geojson_path = os.path.join(self.source_path, "{}_{}_{}.json".format(z, x, y))
             vctr_path = os.path.join(self.destination_path, output_filename)
             if os.path.exists(geojson_path) & os.path.isfile(geojson_path):
-                vctr_tile = VectorTile(tile_extent)
+                vctr_tile = VectorTile(tile_extent, self.property_names_to_publish)
                 features = read_geojson(geojson_path)
                 for feature in features:
                     vctr_tile.add_feature(feature)
@@ -193,11 +207,7 @@ class VectorTileFactory(object):
                 if os.path.exists(vctr_path):
                     os.remove(vctr_path)
                 vctr_tile.to_file(vctr_path)
-
-            nodes = {"boundingVolume": {"region": tile_region},
-                     "geometricError": VectorTileFactory.GEOMETRIC_ERRORS[z],
-                     "refine": "ADD",
-                     "content": {"url": output_filename}}
+                nodes["content"] = {"uri": output_filename}
 
         else:
             nodes = {"boundingVolume": {
@@ -209,8 +219,7 @@ class VectorTileFactory(object):
 
         return nodes, current_node_count
 
-    def _save_tileset(self, tileset_data):
-        tileset_json_path = self._create_tileset_path()
+    def _save_tileset(self, tileset_data, tileset_json_path):
         with open(tileset_json_path, mode='w') as f:
             json.dump(tileset_data, f)
         return os.path.basename(tileset_json_path)
@@ -249,16 +258,14 @@ class VectorTile(object):
 
     def __init__(self, tile_extent, property_names_to_publish=None):
         self.existing_property_names = set()
-        if property_names_to_publish is None:
-            property_names_to_publish = []
         if tile_extent is None:
             tile_extent = {'west': None,
                            'south': None,
                            'east': None,
                            'north': None,
                            }
-        self.featureTable = VectorTile.default_feature_table
-        self.property_names_to_publish = property_names_to_publish
+        self.featureTable = dict(VectorTile.default_feature_table)
+        self.property_names_to_publish = [] if property_names_to_publish is None else property_names_to_publish
 
         self.extent = tile_extent
 
@@ -513,7 +520,13 @@ class VectorTile(object):
         polygon_positions = polygon_positions_container['positions_buffer']
         polyline_positions = polyline_positions_container['positions_buffer']
         point_positions = point_positions_container['positions_buffer']
+        polygon_positions_length = 0 if polygon_positions is None else len(polygon_positions)
+        polyline_positions_length = 0 if polyline_positions is None else len(polyline_positions)
+        point_positions_length = 0 if point_positions is None else len(point_positions)
 
+        print("Content (byte): {} for polygons, {} for polylines, {} for points".format(polygon_positions_length,
+                                                                                        polyline_positions_length,
+                                                                                        point_positions_length))
         if polygon_positions is not None:
             self.featureTable['POLYGON_COUNTS'] = polygon_positions_container['counts']
             self.featureTable['POLYGON_INDEX_COUNTS'] = polygon_positions_container['indexCounts']
@@ -521,10 +534,12 @@ class VectorTile(object):
         if polyline_positions is not None:
             self.featureTable['POLYLINE_COUNTS'] = polyline_positions_container['counts']
 
-        feature_table_json = json.dumps(self.featureTable)
+        feature_table_json = get_string_padded(json.dumps(self.featureTable))
+        print("Write FeatureTable-Content:{}".format(feature_table_json))
         feature_table_binary = None
+
         self.batch_table = self.create_batch_table()
-        batch_table_json = json.dumps(self.batch_table)
+        batch_table_json =  get_string_padded(json.dumps(self.batch_table))
         batch_table_binary = None
 
         indices_binary_byte_length = 0 if indices_binary is None else len(indices_binary)
@@ -542,10 +557,9 @@ class VectorTile(object):
         self.header['batchTableJsonByteLength'] = utf8_byte_len(batch_table_json)
         self.header['batchTableBinaryByteLength'] = batch_table_binary_length
         self.header['indicesByteLength'] = indices_binary_byte_length
-        self.header['polygonPositionsByteLength'] = 0 if polygon_positions is None else int(len(polygon_positions) / 2)
-        self.header['polylinePositionsByteLength'] = 0 if polyline_positions is None else int(
-            len(polyline_positions) / 2)
-        self.header['pointPositionsByteLength'] = 0 if point_positions is None else int(len(point_positions) / 3)
+        self.header['polygonPositionsByteLength'] = 0 if polygon_positions is None else polygon_positions_length
+        self.header['polylinePositionsByteLength'] = 0 if polyline_positions is None else polyline_positions_length
+        self.header['pointPositionsByteLength'] = 0 if point_positions is None else point_positions_length
 
         # begin write
         # Header
@@ -571,17 +585,17 @@ class VectorTile(object):
 
     def _update_extent(self, coordinates: []):
         if type(coordinates[0]) in [list, tuple]:
-            west = min([c[0] for c in coordinates])
-            east = max([c[0] for c in coordinates])
-            north = max([c[1] for c in coordinates])
-            south = min([c[1] for c in coordinates])
+            west = degree_to_radian(min([c[0] for c in coordinates]))
+            east = degree_to_radian(max([c[0] for c in coordinates]))
+            north = degree_to_radian(max([c[1] for c in coordinates]))
+            south = degree_to_radian(min([c[1] for c in coordinates]))
             min_height = min([c[2] for c in coordinates])
             max_height = max([c[2] for c in coordinates])
         else:
-            west = coordinates[0]
-            east = coordinates[0]
-            north = coordinates[1]
-            south = coordinates[1]
+            west = degree_to_radian(coordinates[0])
+            east = degree_to_radian(coordinates[0])
+            north = degree_to_radian(coordinates[1])
+            south = degree_to_radian(coordinates[1])
             min_height = coordinates[2]
             max_height = coordinates[2]
 
@@ -626,7 +640,7 @@ class VectorTile(object):
 
         for feature in self.polygon_features:
             coordinates = feature["geometry"]["coordinates"]
-            coordinates2d = [[c[0], c[1]] for c in coordinates]
+            coordinates2d = [[degree_to_radian(c[0]), degree_to_radian(c[1])] for c in coordinates]
             data = earcut.flatten(coordinates2d)
             indices = earcut.earcut(data['vertices'], data['holes'], data['dimensions'])
             polygon_coordinates.extend(data['vertices'])
@@ -653,7 +667,9 @@ class VectorTile(object):
 
         for feature in self.polyline_features:
             coordinates = feature["geometry"]["coordinates"]
-            data = earcut.flatten(coordinates)
+            rad_coordinates = [[degree_to_radian(c[0]), degree_to_radian(c[1]), degree_to_radian(c[2])] for c in
+                               coordinates]
+            data = earcut.flatten(rad_coordinates)
             polyline_coordinates.extend(data['vertices'])
             polyline_coordinates_count.append(len(data['vertices']))
 
@@ -675,7 +691,10 @@ class VectorTile(object):
 
         for feature in self.point_features:
             coordinate = feature["geometry"]["coordinates"]
-            u, v, h = self._encode_point_position(coordinate)
+            rad_coordinate = [degree_to_radian(coordinate[0]),
+                              degree_to_radian(coordinate[1]),
+                              coordinate[2]]
+            u, v, h = self._encode_point_position(rad_coordinate)
 
             zig_zag_u = zigZagEncode(u - last_u)
             zig_zag_v = zigZagEncode(v - last_v)
@@ -688,10 +707,8 @@ class VectorTile(object):
             last_v = v
             last_h = h
             u_buffer_length = len(u_buffer)
-            print(u_buffer_length)
 
         positions_buffer = u_buffer + v_buffer + h_buffer
-        print(len(positions_buffer))
         prepared_points['positions_buffer'] = positions_buffer
 
         return prepared_points

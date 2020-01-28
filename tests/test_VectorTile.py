@@ -2,6 +2,7 @@
 import json
 import os
 import unittest
+import tempfile
 from Py3d_Tiles.VectorTile import VectorTile, VectorTileFactory
 
 
@@ -9,8 +10,13 @@ class TestVectorTile(unittest.TestCase):
     def setUp(self):
         self.vector_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                              'data/test.vctr')
-        self.vector_temp_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                  'data/temp.vctr')
+        self.temp_directory_path = tempfile.mkdtemp()
+        self.vector_temp_file_path = os.path.join(self.temp_directory_path,
+                                                  'temp.vctr')
+        self.meta_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           'data/geojson/metadata_tileset.json')
+        self.geojson_directory_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                   'data/geojson')
         if os.path.isfile(self.vector_temp_file_path):
             os.remove(self.vector_temp_file_path)
 
@@ -101,7 +107,7 @@ class TestVectorTile(unittest.TestCase):
                      "geometry": {"type": "Point",
                                   "coordinates": [12.9135709195, 49.0548060332, 449.3999660118]},
                      "properties": {"foo": "baz",
-                                    "bar": "8",},
+                                    "bar": "8"},
                      }
                     ]
 
@@ -118,3 +124,19 @@ class TestVectorTile(unittest.TestCase):
         print(vector_tile.batch_table)
         # assert
         self.assertEquals(2, len(vector_tile.points))
+
+    def test_create_Tileset(self):
+        # arrange
+        metadata_path = self.meta_file_path
+        source_path = self.geojson_directory_path
+        destination_path = self.temp_directory_path
+        # act
+        property_names_to_publish = ["name"]
+        factory = VectorTileFactory(metadata_path=metadata_path,
+                                    source_path=source_path,
+                                    destination_path=destination_path,
+                                    property_names_to_publish=property_names_to_publish)
+        factory.create_tileset(node_limit=1000)
+
+        # assert
+        self.assertIsNotNone(factory)
