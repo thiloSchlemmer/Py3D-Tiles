@@ -7,7 +7,7 @@ from setuptools import setup, find_packages
 
 # HACK READTHEDOCS (find a better solution)
 if '/home/docs/checkouts/readthedocs' in os.getcwd():
-    requires = []
+    requires = ['future']
 else:
     requires = ['shapely', 'numpy']
 
@@ -15,7 +15,6 @@ setup(name='Py3d_Tiles',
       version='0.1',
       description='Cesium 3D-Tiles format reader and writer',
       author=u'Thilo Schlemmer',
-      author_email='thilo.schlemmer@gmail.com',
       license='MIT',
       url='https://github.com/thiloSchlemmer/Py3d-Tiles',
       packages=find_packages(exclude=['tests', 'doc']),
